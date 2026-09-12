@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 class Movies123BDProvider : MainAPI() {
     override var mainUrl = "https://123moviesbd.one"
@@ -129,50 +130,194 @@ class Movies123BDProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val isMovie = !data.startsWith("tv,")
-
-        val hosts = mutableListOf<Pair<String, String>>()
+        val tmdbId: String
+        val season: Int?
+        val episode: Int?
 
         if (isMovie) {
-            val tmdbId = data
-            try {
-                val vsSrc = app.get("https://vidsrcme.ru/vs_src.php?type=movie&id=$tmdbId").text
-                tryParseJson<VidSrcResponse>(vsSrc)?.src?.let { srcUrl ->
-                    hosts.add("VidSrc Direct" to srcUrl)
+            tmdbId = data
+            season = null
+            episode = null
+        } else {
+            val parts = data.split(",")
+            tmdbId = parts[1]
+            season = parts[2].toIntOrNull()
+            episode = parts[3].toIntOrNull()
+        }
+
+        val tasks = listOf<suspend () -> Unit>(
+            // 1. Direct VidEm API resolution (1080p, 720p, 360p HLS)
+            { invokeVidEm(tmdbId, season, episode, callback) },
+
+            // 2. Direct 2Embed / Uqloads resolution
+            { invoke2embed(tmdbId, season, episode, callback) },
+
+            // 3. Direct VidSrc API
+            {
+                try {
+                    val vsUrl = if (isMovie) {
+                        "https://vidsrcme.ru/vs_src.php?type=movie&id=$tmdbId"
+                    } else {
+                        "https://vidsrcme.ru/vs_src.php?type=tv&id=$tmdbId&season=$season&episode=$episode"
+                    }
+                    val vsSrc = app.get(vsUrl).text
+                    tryParseJson<VidSrcResponse>(vsSrc)?.src?.let { srcUrl ->
+                        resolveStreamFromEmbed("VidSrc Direct", srcUrl, "https://vidsrcme.ru/", subtitleCallback, callback)
+                    }
+                } catch (e: Throwable) {
+                    logError(e)
                 }
+            },
+
+            // 4. CineSrc embed fallback
+            {
+                val cinesrcUrl = if (isMovie) {
+                    "https://cinesrc.st/embed/movie/$tmdbId"
+                } else {
+                    "https://cinesrc.st/embed/tv/$tmdbId?s=$season&e=$episode"
+                }
+                resolveStreamFromEmbed("CineSrc", cinesrcUrl, "$mainUrl/", subtitleCallback, callback)
+            },
+
+            // 5. VidSrc embed fallback
+            {
+                val vidsrcUrl = if (isMovie) {
+                    "https://vidsrc.me/embed/movie?tmdb=$tmdbId"
+                } else {
+                    "https://vidsrc.me/embed/tv?tmdb=$tmdbId&season=$season&episode=$episode"
+                }
+                resolveStreamFromEmbed("VidSrc", vidsrcUrl, "$mainUrl/", subtitleCallback, callback)
+            }
+        )
+
+        tasks.amap { task ->
+            try {
+                task.invoke()
             } catch (e: Throwable) {
                 logError(e)
             }
-
-            hosts.add("CineSrc" to "https://cinesrc.st/embed/movie/$tmdbId")
-            hosts.add("VidSrc" to "https://vidsrc.me/embed/movie?tmdb=$tmdbId")
-            hosts.add("VidSrcPM" to "https://vidsrc.pm/embed/movie?tmdb=$tmdbId")
-            hosts.add("Smashy" to "https://player.smashy.stream/movie/$tmdbId")
-        } else {
-            val parts = data.split(",")
-            val tmdbId = parts[1]
-            val s = parts[2]
-            val e = parts[3]
-
-            try {
-                val vsSrc = app.get("https://vidsrcme.ru/vs_src.php?type=tv&id=$tmdbId&season=$s&episode=$e").text
-                tryParseJson<VidSrcResponse>(vsSrc)?.src?.let { srcUrl ->
-                    hosts.add("VidSrc Direct" to srcUrl)
-                }
-            } catch (err: Throwable) {
-                logError(err)
-            }
-
-            hosts.add("CineSrc" to "https://cinesrc.st/embed/tv/$tmdbId?s=$s&e=$e")
-            hosts.add("VidSrc" to "https://vidsrc.me/embed/tv?tmdb=$tmdbId&season=$s&episode=$e")
-            hosts.add("VidSrcPM" to "https://vidsrc.pm/embed/tv?tmdb=$tmdbId&season=$s&episode=$e")
-            hosts.add("Smashy" to "https://player.smashy.stream/tv/$tmdbId/$s/$e")
-        }
-
-        hosts.amap { (serverName, embedUrl) ->
-            resolveStreamFromEmbed(serverName, embedUrl, "$mainUrl/", subtitleCallback, callback)
         }
 
         return true
+    }
+
+    private suspend fun invokeVidEm(
+        tmdbId: String,
+        season: Int? = null,
+        episode: Int? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val embedUrl = if (season != null && episode != null) {
+                "https://videm.xyz/embed/tv/$tmdbId/$season/$episode"
+            } else {
+                "https://videm.xyz/embed/movie/$tmdbId"
+            }
+
+            val text = app.get(
+                embedUrl,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to "https://www.2embed.cc/"
+                )
+            ).text
+
+            val qMatch = Regex("""var\s+Q\s*=\s*(\{.+?\});""", RegexOption.DOT_MATCHES_ALL).find(text)
+            val qJson = qMatch?.groupValues?.get(1) ?: return
+            val vidEmData = tryParseJson<VidEmData>(qJson) ?: return
+            val tToken = vidEmData.t ?: return
+            val servers = vidEmData.ssr?.servers ?: return
+
+            servers.amap { server ->
+                try {
+                    val ref = server.ref ?: return@amap
+                    val playUrl = "https://videm.xyz/api.php?a=play&ref=${URLEncoder.encode(ref, "UTF-8")}&t=${URLEncoder.encode(tToken, "UTF-8")}&fresh=1"
+                    val playRespText = app.get(
+                        playUrl,
+                        headers = mapOf(
+                            "User-Agent" to USER_AGENT,
+                            "Referer" to embedUrl
+                        )
+                    ).text
+                    val playResp = tryParseJson<VidEmPlayResponse>(playRespText) ?: return@amap
+                    val relUrl = playResp.url ?: return@amap
+                    val streamUrl = if (relUrl.startsWith("http")) relUrl else "https://videm.xyz$relUrl"
+
+                    M3u8Helper.generateM3u8(
+                        source = "123Movies (VidEm - ${server.name ?: "HD"})",
+                        streamUrl = streamUrl,
+                        referer = "https://videm.xyz/",
+                        headers = mapOf(
+                            "Referer" to "https://videm.xyz/",
+                            "User-Agent" to USER_AGENT
+                        )
+                    ).forEach(callback)
+                } catch (e: Throwable) {
+                    logError(e)
+                }
+            }
+        } catch (e: Throwable) {
+            logError(e)
+        }
+    }
+
+    private suspend fun invoke2embed(
+        tmdbId: String,
+        season: Int? = null,
+        episode: Int? = null,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val headers = mapOf(
+                "Referer" to "https://www.2embed.cc",
+                "User-Agent" to USER_AGENT,
+                "sec-fetch-dest" to "iframe"
+            )
+            val slug = if (season != null && episode != null) {
+                "embedtv/$tmdbId&s=$season&e=$episode"
+            } else {
+                "embed/$tmdbId"
+            }
+            val api = "https://www.2embed.cc/$slug"
+            val text = app.get(api, headers = headers).text
+            val sKey = "swish?id="
+            val start = text.indexOf(sKey)
+            if (start < 0) return
+            val end = text.indexOf("'", start + sKey.length)
+            if (end < 0) return
+            val strmId = text.substring(start + sKey.length, end)
+
+            val uplUrl = "https://uqloads.xyz/e/$strmId"
+            val res = app.get(uplUrl, headers = headers).text
+            val sKey2 = "eval(function"
+            val start2 = res.indexOf(sKey2)
+            if (start2 < 0) return
+            val eKey2 = "split('|')))"
+            val end2 = res.indexOf(eKey2, start2)
+            if (end2 < 0) return
+            val packed = res.substring(start2, end2 + eKey2.length)
+            val strmData = JsUnpacker(packed).unpack() ?: return
+            val sKey3 = "\"hls2\":\""
+            val start3 = strmData.indexOf(sKey3)
+            if (start3 >= 0) {
+                val sStart = start3 + sKey3.length
+                val sEnd = strmData.indexOf("\"", sStart)
+                if (sEnd > sStart) {
+                    val streamUrl = strmData.substring(sStart, sEnd)
+                    M3u8Helper.generateM3u8(
+                        source = "123Movies (2Embed)",
+                        streamUrl = streamUrl,
+                        referer = "https://uqloads.xyz/",
+                        headers = mapOf(
+                            "Referer" to "https://uqloads.xyz/",
+                            "User-Agent" to USER_AGENT
+                        )
+                    ).forEach(callback)
+                }
+            }
+        } catch (e: Throwable) {
+            logError(e)
+        }
     }
 
     private suspend fun resolveStreamFromEmbed(
@@ -186,11 +331,27 @@ class Movies123BDProvider : MainAPI() {
         if (extracted) return
 
         try {
+            val autoClickScript = """
+                (function() {
+                    function clickPlay() {
+                        var v = document.querySelector('video');
+                        if (v) { try { v.muted = true; v.play(); } catch(e){} }
+                        var btns = document.querySelectorAll('button, .jw-bigplay, #bigPlay, .play-button, [aria-label="Play"]');
+                        for (var i = 0; i < btns.length; i++) {
+                            try { btns[i].click(); } catch(e){}
+                        }
+                    }
+                    clickPlay();
+                    setInterval(clickPlay, 1000);
+                })();
+            """.trimIndent()
+
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""(m3u8|\.mp4|master\.txt)"""),
                 additionalUrls = listOf(Regex("""(m3u8|\.mp4|master\.txt)""")),
                 useOkhttp = false,
-                timeout = 25_000L
+                script = autoClickScript,
+                timeout = 20_000L
             )
             val response = app.get(
                 url,
@@ -223,6 +384,25 @@ class Movies123BDProvider : MainAPI() {
             logError(e)
         }
     }
+
+    data class VidEmData(
+        @JsonProperty("t") val t: String?,
+        @JsonProperty("ssr") val ssr: VidEmSsr?
+    )
+
+    data class VidEmSsr(
+        @JsonProperty("servers") val servers: List<VidEmServer>?
+    )
+
+    data class VidEmServer(
+        @JsonProperty("ref") val ref: String?,
+        @JsonProperty("name") val name: String?
+    )
+
+    data class VidEmPlayResponse(
+        @JsonProperty("url") val url: String?,
+        @JsonProperty("type") val type: String?
+    )
 
     data class VidSrcResponse(
         @JsonProperty("src") val src: String?
