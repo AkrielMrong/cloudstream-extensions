@@ -132,10 +132,10 @@ class HelloMeghalayaProvider : MainAPI() {
 
         if (isShow) {
             val episodes = mutableListOf<Episode>()
-            val subcategories = item.subcategories
+            val subcategories = item?.subcategories
             if (!subcategories.isNullOrEmpty()) {
-                val catalogFriendlyId = item.catalogObject?.friendlyId ?: "web-series"
-                val showFriendlyId = item.friendlyId ?: friendlyId.ifBlank { "web-series" }
+                val catalogFriendlyId = item?.catalogObject?.friendlyId ?: "web-series"
+                val showFriendlyId = item?.friendlyId ?: friendlyId.ifBlank { "web-series" }
 
                 subcategories.forEachIndexed { subIndex, sub ->
                     val seasonNum = Regex("""(?:Season|Part)\s*(\d+)""", RegexOption.IGNORE_CASE)
