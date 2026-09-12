@@ -1,6 +1,6 @@
 {
-  "name": "Movies123BD Repository",
-  "description": "Custom Cloudstream 3 Plugins Repository",
+  "name": "Cloudstream Extensions Repository",
+  "description": "Custom Cloudstream 3 Plugins Repository including Hello Meghalaya and Movies123BD",
   "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/AkrielMrong/cloudstream-extensions/builds/plugins.json"
