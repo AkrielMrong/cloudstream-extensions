@@ -6,6 +6,9 @@ import com.lagradost.cloudstream3.AcraApplication.Companion.getKey
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.UUID
@@ -41,13 +44,15 @@ class HelloMeghalayaProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val items = if (request.data == "coming-soon") {
             val url = "$API_URL/catalog_lists/coming-soon?auth_token=$AUTH_TOKEN"
-            val res = app.get(url).parsedSafe<ComingSoonResponse>()
+            val text = app.get(url).text
+            val res = tryParseJson<ComingSoonResponse>(text)
             res?.data?.mapNotNull { it.toSearchResponse() } ?: emptyList()
         } else if (request.data.startsWith("catalog:")) {
             val catalogId = request.data.removePrefix("catalog:")
             val pageIdx = (page - 1).coerceAtLeast(0)
             val url = "$API_URL/catalogs/$catalogId/items.gzip?page=$pageIdx&page_size=20&region=IN&auth_token=$AUTH_TOKEN"
-            val res = app.get(url).parsedSafe<CatalogItemsResponse>()
+            val text = app.get(url).text
+            val res = tryParseJson<CatalogItemsResponse>(text)
             res?.data?.items?.mapNotNull { it.toSearchResponse() } ?: emptyList()
         } else {
             emptyList()
@@ -58,7 +63,8 @@ class HelloMeghalayaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val url = "$API_URL/search3?q=$encodedQuery&region=IN&auth_token=$AUTH_TOKEN"
-        val res = app.get(url).parsedSafe<Search3Response>()
+        val text = app.get(url).text
+        val res = tryParseJson<Search3Response>(text)
         val resultList = mutableListOf<SearchResponse>()
         res?.data?.items?.values?.forEach { category ->
             category.items?.mapNotNull { it.toSearchResponse() }?.let {
@@ -108,7 +114,8 @@ class HelloMeghalayaProvider : MainAPI() {
         }
 
         val detailUrl = "$API_URL/catalogs/$catId/items/$contentId.gzip?region=IN&auth_token=$AUTH_TOKEN"
-        val item = app.get(detailUrl).parsedSafe<SingleItemResponse>()?.data
+        val detailText = app.get(detailUrl).text
+        val item = tryParseJson<SingleItemResponse>(detailText)?.data
             ?: throw ErrorLoadingException("Failed to fetch media details")
 
         val title = item.title ?: "Unknown"
@@ -134,7 +141,8 @@ class HelloMeghalayaProvider : MainAPI() {
                     val seasonFriendly = sub.friendlyId ?: ""
                     val epUrl = "$API_URL/catalogs/$catalogFriendlyId/items/$showFriendlyId/subcategories/$seasonFriendly/episodes.gzip?order_by=asc&auth_token=$AUTH_TOKEN&region=IN&status=published"
                     try {
-                        val epRes = app.get(epUrl).parsedSafe<CatalogItemsResponse>()
+                        val epText = app.get(epUrl).text
+                        val epRes = tryParseJson<CatalogItemsResponse>(epText)
                         epRes?.data?.items?.forEachIndexed { epIndex, ep ->
                             val epTitle = ep.title ?: "Episode ${epIndex + 1}"
                             val epPart = ep.part ?: (epIndex + 1)
@@ -160,7 +168,8 @@ class HelloMeghalayaProvider : MainAPI() {
             if (episodes.isEmpty()) {
                 try {
                     val epListUrl = "$API_URL/catalogs/$catId/items/$contentId/episode_list?page=0&page_size=500&order_by=asc&auth_token=$AUTH_TOKEN&region=IN&item_language=en&status=published"
-                    val epRes = app.get(epListUrl).parsedSafe<CatalogItemsResponse>()
+                    val epListText = app.get(epListUrl).text
+                    val epRes = tryParseJson<CatalogItemsResponse>(epListText)
                     epRes?.data?.items?.forEachIndexed { epIndex, ep ->
                         val epTitle = ep.title ?: "Episode ${epIndex + 1}"
                         val epPart = ep.part ?: (epIndex + 1)
@@ -232,7 +241,8 @@ class HelloMeghalayaProvider : MainAPI() {
         if (!streamFound) {
             try {
                 val detailUrl = "$API_URL/catalogs/$catalogId/items/$contentId.gzip?region=IN&auth_token=$AUTH_TOKEN"
-                val item = app.get(detailUrl).parsedSafe<SingleItemResponse>()?.data
+                val detailText = app.get(detailUrl).text
+                val item = tryParseJson<SingleItemResponse>(detailText)?.data
                 val previewUrl = item?.preview?.previewUrl ?: item?.previewUrl
                 if (!previewUrl.isNullOrBlank() && previewUrl.contains("m3u8")) {
                     M3u8Helper.generateM3u8(
@@ -267,27 +277,22 @@ class HelloMeghalayaProvider : MainAPI() {
             val raw = "$catalogId$contentId$session$ts$SECRET_KEY"
             val md5 = md5(raw)
 
-            val payload = mapOf(
-                "catalog_id" to catalogId,
-                "content_id" to contentId,
-                "category" to "",
-                "region" to "IN",
-                "auth_token" to AUTH_TOKEN,
-                "id" to session,
-                "md5" to md5,
-                "ts" to ts,
-                "platform" to "ios"
-            )
+            val payload = """
+                {"catalog_id":"$catalogId","content_id":"$contentId","category":"","region":"IN","auth_token":"$AUTH_TOKEN","id":"$session","md5":"$md5","ts":"$ts","platform":"ios"}
+            """.trimIndent()
 
-            val res = app.post(
+            val requestBody = payload.toRequestBody("application/json; charset=utf-8".toMediaType())
+
+            val resText = app.post(
                 "$API_URL/v2/users/get_all_details.gzip",
-                json = payload,
+                requestBody = requestBody,
                 headers = mapOf(
                     "Content-Type" to "application/json",
                     "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"
                 )
-            ).parsedSafe<AllDetailsResponse>()
+            ).text
 
+            val res = tryParseJson<AllDetailsResponse>(resText)
             val hlsList = res?.data?.adaptiveUrls?.hd?.hls
             val playbackUrl = hlsList?.firstOrNull()?.playbackUrl
                 ?: res?.data?.adaptiveUrl
@@ -322,35 +327,40 @@ class HelloMeghalayaProvider : MainAPI() {
         return try {
             val deviceId = UUID.randomUUID().toString().replace("-", "").take(16)
             val guestUid = "guest_${UUID.randomUUID().toString().replace("-", "")}"
-            val body = mapOf(
-                "auth_token" to AUTH_TOKEN,
-                "device_name" to "Cloudstream",
-                "device_type" to "android",
-                "device_id" to deviceId,
-                "user" to mapOf(
-                    "ext_account_email_id" to "guest_cloudstream@hellomeghalaya.in",
-                    "firstname" to "Cloudstream",
-                    "provider" to "Google",
-                    "uid" to guestUid,
-                    "region" to "IN",
-                    "latitude" to 25.5788,
-                    "longitude" to 91.8933,
-                    "city" to "Shillong",
-                    "state" to "Meghalaya",
-                    "district" to "East Khasi Hills"
-                ),
-                "mode" to "web"
-            )
+            val payload = """
+                {
+                    "auth_token": "$AUTH_TOKEN",
+                    "device_name": "Cloudstream",
+                    "device_type": "android",
+                    "device_id": "$deviceId",
+                    "user": {
+                        "ext_account_email_id": "cloudstream_guest@hellomeghalaya.in",
+                        "firstname": "Cloudstream",
+                        "provider": "Google",
+                        "uid": "$guestUid",
+                        "region": "IN",
+                        "latitude": 25.5788,
+                        "longitude": 91.8933,
+                        "city": "Shillong",
+                        "state": "Meghalaya",
+                        "district": "East Khasi Hills"
+                    },
+                    "mode": "web"
+                }
+            """.trimIndent()
 
-            val res = app.post(
+            val requestBody = payload.toRequestBody("application/json; charset=utf-8".toMediaType())
+
+            val resText = app.post(
                 "$API_URL/users/external_auth/sign_in",
-                json = body,
+                requestBody = requestBody,
                 headers = mapOf(
                     "Content-Type" to "application/json",
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                 )
-            ).parsedSafe<AuthResponse>()
+            ).text
 
+            val res = tryParseJson<AuthResponse>(resText)
             val session = res?.data?.session.orEmpty()
             if (session.isNotBlank()) {
                 cachedSession = session
