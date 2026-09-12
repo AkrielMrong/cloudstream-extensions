@@ -2,7 +2,9 @@ package com.movies123bd
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
 
 class Movies123BDProvider : MainAPI() {
@@ -55,13 +57,13 @@ class Movies123BDProvider : MainAPI() {
             ?: throw ErrorLoadingException("Failed to locate TMDB identifier")
 
         val jsonLdScript = document.selectFirst("script[type='application/ld+json']")?.data()
-        val ldData = jsonLdScript?.let { parseJson<JsonLdMovie>(it) }
+        val ldData = jsonLdScript?.let { tryParseJson<JsonLdMovie>(it) }
 
         val title = ldData?.name ?: document.selectFirst("h1")?.text()?.trim() ?: "Unknown"
         val poster = ldData?.image ?: fixUrlNull(document.selectFirst(".poster img")?.attr("src"))
         val plot = ldData?.description ?: document.selectFirst(".overview")?.text()
         val year = ldData?.datePublished?.take(4)?.toIntOrNull()
-        val rating = ldData?.aggregateRating?.ratingValue?.toRatingInt()
+        val rating = ldData?.aggregateRating?.ratingValue?.toDoubleOrNull()
         val cast = ldData?.actor?.mapNotNull { it.name } ?: emptyList()
 
         if (isMovie) {
@@ -69,7 +71,7 @@ class Movies123BDProvider : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                this.rating = rating
+                this.score = Score.from10(rating)
                 addActors(cast)
             }
         } else {
@@ -86,7 +88,7 @@ class Movies123BDProvider : MainAPI() {
                 this.posterUrl = poster
                 this.plot = plot
                 this.year = year
-                this.rating = rating
+                this.score = Score.from10(rating)
                 addActors(cast)
             }
         }

@@ -1,12 +1,11 @@
 package com.movies123bd
 
-import android.content.Context
+import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class Movies123BDPlugin : Plugin() {
-    override fun load(context: Context) {
+class Movies123BDPlugin : BasePlugin() {
+    override fun load() {
         registerMainAPI(Movies123BDProvider())
     }
 }
