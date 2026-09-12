@@ -1,5 +1,6 @@
 package com.hellomeghalaya
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
@@ -114,17 +115,20 @@ class HelloMeghalayaProvider : MainAPI() {
         val detailUrl = "$API_URL/catalogs/$catId/items/$contentId.gzip?region=IN&auth_token=$AUTH_TOKEN"
         val detailText = app.get(detailUrl).text
         val item = tryParseJson<SingleItemResponse>(detailText)?.data
-            ?: throw ErrorLoadingException("Failed to fetch media details")
 
-        val title = item.title ?: "Unknown"
-        val plot = item.description ?: item.shortDescription
-        val poster = extractPoster(item.thumbnails)
-        val year = Regex("""\b(19\d\d|20\d\d)\b""").find(item.releaseDateString ?: item.publishedDate ?: "")?.value?.toIntOrNull()
-        val rating = item.averageUserRating?.toDoubleOrNull()
-        val tags = item.displayGenres ?: item.genres ?: emptyList()
-        val actors = item.starCast?.mapNotNull { it.name } ?: emptyList()
+        val title = item?.title
+            ?: Regex(""""title"\s*:\s*"([^"]+)"""").find(detailText)?.groupValues?.get(1)
+            ?: "Media Item"
+        val plot = item?.description ?: item?.shortDescription
+            ?: Regex(""""description"\s*:\s*"([^"]*)"""").find(detailText)?.groupValues?.get(1)
+        val poster = extractPoster(item?.thumbnails)
+            ?: Regex(""""url"\s*:\s*"(https?:\\?/\\?/[^"]+\.jpg[^"]*)"""").find(detailText)?.groupValues?.get(1)?.replace("\\/", "/")
+        val year = Regex("""\b(19\d\d|20\d\d)\b""").find(item?.releaseDateString ?: item?.publishedDate ?: "")?.value?.toIntOrNull()
+        val rating = item?.averageUserRating?.toDoubleOrNull()
+        val tags = item?.displayGenres ?: item?.genres ?: emptyList()
+        val actors = item?.starCast?.mapNotNull { it.name } ?: emptyList()
 
-        val isShow = theme == "show" || theme == "web-series" || !item.subcategories.isNullOrEmpty()
+        val isShow = theme == "show" || theme == "web-series" || !(item?.subcategories.isNullOrEmpty())
 
         if (isShow) {
             val episodes = mutableListOf<Episode>()
@@ -291,21 +295,56 @@ class HelloMeghalayaProvider : MainAPI() {
             ).text
 
             val res = tryParseJson<AllDetailsResponse>(resText)
-            val hlsList = res?.data?.adaptiveUrls?.hd?.hls
-            val playbackUrl = hlsList?.firstOrNull()?.playbackUrl
-                ?: res?.data?.adaptiveUrl
-                ?: res?.data?.playUrl?.saranyu?.url
+            val hlsList = res?.data?.adaptiveUrls?.hd?.hls ?: res?.data?.adaptiveUrls?.sd?.hls
+            var playbackUrl = hlsList?.firstOrNull()?.playbackUrl
+                ?: res?.data?.playUrl?.saranyu?.url?.takeIf { it.contains("m3u8") }
+                ?: res?.data?.adaptiveUrl?.takeIf { it.contains("m3u8") }
 
-            if (!playbackUrl.isNullOrBlank() && playbackUrl.contains("m3u8")) {
-                M3u8Helper.generateM3u8(
-                    source = name,
-                    streamUrl = playbackUrl,
-                    referer = "$mainUrl/",
-                    headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
-                        "Referer" to "$mainUrl/"
-                    )
-                ).forEach(callback)
+            if (playbackUrl.isNullOrBlank()) {
+                val m3u8Match = Regex("""(https?:[^\s"'\\]+\.m3u8[^\s"'\\]*)""").find(resText)
+                if (m3u8Match != null) {
+                    playbackUrl = m3u8Match.groupValues[1].replace("\\/", "/")
+                } else {
+                    val dashMatch = Regex("""https?:[^\s"'\\]+/dash/file_dash\.mpd""").find(resText)
+                    if (dashMatch != null) {
+                        playbackUrl = dashMatch.value.replace("\\/", "/").replace("/dash/file_dash.mpd", "/main_playlist.m3u8")
+                    }
+                }
+            }
+
+            if (!playbackUrl.isNullOrBlank()) {
+                // 1. Emit direct HLS stream link
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name [HLS Auto]",
+                        url = playbackUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = Qualities.P1080.value
+                        this.headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                            "Referer" to "$mainUrl/"
+                        )
+                    }
+                )
+
+                // 2. Multi-quality generation
+                try {
+                    M3u8Helper.generateM3u8(
+                        source = name,
+                        streamUrl = playbackUrl,
+                        referer = "$mainUrl/",
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                            "Referer" to "$mainUrl/"
+                        )
+                    ).forEach(callback)
+                } catch (e: Throwable) {
+                    logError(e)
+                }
+
                 return true
             }
         } catch (e: Throwable) {
@@ -324,25 +363,7 @@ class HelloMeghalayaProvider : MainAPI() {
             val deviceId = UUID.randomUUID().toString().replace("-", "").take(16)
             val guestUid = "guest_${UUID.randomUUID().toString().replace("-", "")}"
             val payload = """
-                {
-                    "auth_token": "$AUTH_TOKEN",
-                    "device_name": "Cloudstream",
-                    "device_type": "android",
-                    "device_id": "$deviceId",
-                    "user": {
-                        "ext_account_email_id": "cloudstream_guest@hellomeghalaya.in",
-                        "firstname": "Cloudstream",
-                        "provider": "Google",
-                        "uid": "$guestUid",
-                        "region": "IN",
-                        "latitude": 25.5788,
-                        "longitude": 91.8933,
-                        "city": "Shillong",
-                        "state": "Meghalaya",
-                        "district": "East Khasi Hills"
-                    },
-                    "mode": "web"
-                }
+                {"auth_token":"$AUTH_TOKEN","device_name":"Cloudstream","device_type":"android","device_id":"$deviceId","user":{"ext_account_email_id":"cloudstream_guest@hellomeghalaya.in","firstname":"Cloudstream","provider":"Google","uid":"$guestUid","region":"IN","latitude":25.5788,"longitude":91.8933,"city":"Shillong","state":"Meghalaya","district":"East Khasi Hills"},"mode":"web"}
             """.trimIndent()
 
             val requestBody = payload.toRequestBody("application/json; charset=utf-8".toMediaType())
@@ -357,7 +378,9 @@ class HelloMeghalayaProvider : MainAPI() {
             ).text
 
             val res = tryParseJson<AuthResponse>(resText)
-            val session = res?.data?.session.orEmpty()
+            val session = res?.data?.session?.ifBlank { null }
+                ?: Regex(""""session"\s*:\s*"([a-zA-Z0-9_-]+)"""").find(resText)?.groupValues?.get(1).orEmpty()
+
             if (session.isNotBlank()) {
                 cachedSession = session
             }
@@ -389,19 +412,23 @@ class HelloMeghalayaProvider : MainAPI() {
     }
 
     // JSON DTO Models
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class CatalogItemsResponse(
         @JsonProperty("data") val data: CatalogItemsData? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class CatalogItemsData(
         @JsonProperty("items") val items: List<ItemDto>? = null,
         @JsonProperty("total_items_count") val totalItemsCount: Int? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ComingSoonResponse(
         @JsonProperty("data") val data: List<ItemDto>? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ItemDto(
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("content_id") val contentId: String? = null,
@@ -427,11 +454,13 @@ class HelloMeghalayaProvider : MainAPI() {
         @JsonProperty("director") val director: List<PersonDto>? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class CatalogObject(
         @JsonProperty("id") val id: String? = null,
         @JsonProperty("friendly_id") val friendlyId: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ThumbnailsDto(
         @JsonProperty("xl_image_2_3") val xlImage23: ImageDto? = null,
         @JsonProperty("large_2_3") val large23: ImageDto? = null,
@@ -443,15 +472,18 @@ class HelloMeghalayaProvider : MainAPI() {
         @JsonProperty("small_16_9") val small169: ImageDto? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class ImageDto(
         @JsonProperty("url") val url: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PreviewDto(
         @JsonProperty("preview_available") val previewAvailable: Boolean? = null,
         @JsonProperty("preview_url") val previewUrl: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SubcategoryDto(
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("content_id") val contentId: String? = null,
@@ -459,65 +491,79 @@ class HelloMeghalayaProvider : MainAPI() {
         @JsonProperty("episode_count") val episodeCount: Int? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PersonDto(
         @JsonProperty("name") val name: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class Search3Response(
         @JsonProperty("data") val data: Search3Data? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class Search3Data(
         @JsonProperty("items") val items: Map<String, Search3Category>? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class Search3Category(
         @JsonProperty("display_title") val displayTitle: String? = null,
         @JsonProperty("Items") val items: List<ItemDto>? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SingleItemResponse(
         @JsonProperty("data") val data: ItemDto? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class AuthResponse(
         @JsonProperty("data") val data: AuthData? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class AuthData(
         @JsonProperty("session") val session: String? = null,
         @JsonProperty("user_id") val userId: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class AllDetailsResponse(
         @JsonProperty("data") val data: AllDetailsData? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class AllDetailsData(
         @JsonProperty("adaptive_urls") val adaptiveUrls: AdaptiveUrlsDto? = null,
         @JsonProperty("adaptive_url") val adaptiveUrl: String? = null,
         @JsonProperty("play_url") val playUrl: PlayUrlDto? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class AdaptiveUrlsDto(
         @JsonProperty("hd") val hd: QualityDto? = null,
         @JsonProperty("sd") val sd: QualityDto? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class QualityDto(
         @JsonProperty("hls") val hls: List<StreamUrlDto>? = null,
         @JsonProperty("dash") val dash: List<StreamUrlDto>? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class StreamUrlDto(
         @JsonProperty("playback_url") val playbackUrl: String? = null,
         @JsonProperty("protocol") val protocol: String? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class PlayUrlDto(
         @JsonProperty("saranyu") val saranyu: SaranyuUrlDto? = null
     )
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     data class SaranyuUrlDto(
         @JsonProperty("url") val url: String? = null
     )

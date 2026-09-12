@@ -3,7 +3,7 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 }
 
-version = 1
+version = 2
 
 cloudstream {
     description = "Watch Movies, Web Series, Music Videos, and Podcasts from Hello Meghalaya (hellomeghalaya.in)"
