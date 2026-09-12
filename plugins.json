@@ -1,5 +1,25 @@
 [
     {
+        "fileHash": "sha256-43117688edf73b28b691cd5fd5a849ccb575f41ea9ce5777d0997cbc10c5b7cd",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/AkrielMrong/cloudstream-extensions",
+        "fileSize": 49816,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Antigravity"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 1,
+        "internalName": "HelloMeghalaya",
+        "description": "Watch Movies, Web Series, Music Videos, and Podcasts from Hello Meghalaya (hellomeghalaya.in)",
+        "url": "https://raw.githubusercontent.com/AkrielMrong/cloudstream-extensions/builds/HelloMeghalaya.cs3",
+        "name": "HelloMeghalaya"
+    },
+    {
         "fileHash": "sha256-89c9ebba49654ec06cdc3c46153f4d8b99bd3d525cb932ef1a168dd0dd228fa2",
         "apiVersion": 1,
         "repositoryUrl": "https://github.com/AkrielMrong/cloudstream-extensions",
