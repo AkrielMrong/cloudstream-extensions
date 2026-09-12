@@ -15,6 +15,7 @@ cloudstream {
 }
 
 android {
+    namespace = "com.movies123bd"
     buildFeatures {
         buildConfig = true
         viewBinding = true
