@@ -2,7 +2,6 @@ package com.hellomeghalaya
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.AcraApplication.Companion.getKey
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.mvvm.logError
 import com.lagradost.cloudstream3.utils.*
@@ -37,7 +36,6 @@ class HelloMeghalayaProvider : MainAPI() {
         private const val API_URL = "https://ottapi.hellomeghalaya.in"
         private const val AUTH_TOKEN = "xFGLeq8pLfWPizFxmJXy"
         private const val SECRET_KEY = "5c9239f7f3648a093ce4"
-        const val KEY_SESSION = "HELLO_MEGHALAYA_SESSION"
         private var cachedSession: String? = null
     }
 
@@ -317,8 +315,6 @@ class HelloMeghalayaProvider : MainAPI() {
     }
 
     private suspend fun getSession(): String {
-        val userSession = getKey(KEY_SESSION)
-        if (!userSession.isNullOrBlank()) return userSession
         if (!cachedSession.isNullOrBlank()) return cachedSession!!
         return refreshSession()
     }

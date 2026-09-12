@@ -49,8 +49,10 @@ jobs:
           cd $GITHUB_WORKSPACE/src
           chmod +x gradlew
           ./gradlew make makePluginsJson --stacktrace 2>&1 | tee $GITHUB_WORKSPACE/builds/build.log
+          GRADLE_EXIT=${PIPESTATUS[0]}
           cp -r **/build/*.cs3 $GITHUB_WORKSPACE/builds/ || true
           cp build/plugins.json $GITHUB_WORKSPACE/builds/ || true
+          exit $GRADLE_EXIT
 
       - name: Push builds
         if: always()
