@@ -1,0 +1,22 @@
+[
+    {
+        "fileHash": "sha256-89c9ebba49654ec06cdc3c46153f4d8b99bd3d525cb932ef1a168dd0dd228fa2",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/AkrielMrong/cloudstream-extensions",
+        "fileSize": 33158,
+        "status": 1,
+        "language": "en",
+        "authors": [
+            "Antigravity"
+        ],
+        "tvTypes": [
+            "Movie",
+            "TvSeries"
+        ],
+        "version": 3,
+        "internalName": "Movies123BD",
+        "description": "Watch Movies and TV Series from 123moviesbd.one",
+        "url": "https://raw.githubusercontent.com/AkrielMrong/cloudstream-extensions/builds/Movies123BD.cs3",
+        "name": "Movies123BD"
+    }
+]
