@@ -118,7 +118,7 @@ class Movies123BDProvider : MainAPI() {
         }
 
         hosts.forEach { embedUrl ->
-            loadExtractor(embedUrl, subtitleCallback, callback)
+            loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
         }
 
         return true
